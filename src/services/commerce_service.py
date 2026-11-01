@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from urllib.parse import quote
 import httpx
 from src.infrastructure.external.seller_client import SellerClient, SellerError
@@ -20,6 +21,28 @@ class CommerceService:
     def ensure_dispatch(self):
         if self.repo.preferences().get('paused'):
             raise ValueError('已暂停，请处理异常后解除暂停')
+
+    def _extract_item_id(self, log: dict) -> str | None:
+        for key in ('item_id', 'published_item_id', 'seller_item_id', 'itemId'):
+            val = log.get(key)
+            if val and str(val).strip():
+                return str(val).strip()
+        return None
+
+    def _match_log(self, log: dict, product: dict, listing: dict) -> bool:
+        """Multi-condition matching for publish logs."""
+        # Exact material match has highest priority
+        if listing.get('material_id') and log.get('material_id') == listing['material_id']:
+            return True
+        # Title match
+        title = str(product.get('title') or '')
+        if title and title in str(log):
+            return True
+        # SKU match
+        sku = str(product.get('sku') or '')
+        if sku and sku in str(log):
+            return True
+        return False
 
     async def publish(self, product_id, account_id):
         async with self.publish_lock:
@@ -47,13 +70,12 @@ class CommerceService:
                 result = await self.seller.request('POST', '/product-publish', payload)
                 item_id = result.get('published_item_id')
                 if not item_id:
-                    # Attempt basic reconciliation by checking publish logs
                     logger.warning(f"No published_item_id returned for listing {listing['id']}, attempting reconcile")
                     logs = await self.seller.request('GET', '/publish-logs')
-                    # Simple heuristic: look for recent matching title
-                    for log in (logs if isinstance(logs, list) else logs.get('logs', []))[:5]:
-                        if product['title'] in str(log):
-                            item_id = log.get('item_id') or log.get('published_item_id')
+                    logs_list = logs if isinstance(logs, list) else logs.get('logs', [])
+                    for log in logs_list[:10]:  # recent window
+                        if self._match_log(log, product, {'material_id': material_id}):
+                            item_id = self._extract_item_id(log)
                             if item_id:
                                 break
                     if not item_id:
@@ -73,19 +95,33 @@ class CommerceService:
                 self.repo.record('publish', listing['id'], 'submitted')
 
     async def reconcile_unknown(self, listing_id):
-        """Active reconciliation for unknown publish status."""
+        """Active reconciliation for unknown publish status with multi-condition matching."""
         listing = self.repo.listing(listing_id)
         if listing['status'] not in ('unknown', 'publishing'):
             raise ValueError('仅未知或发布中状态可主动对账')
         try:
             logs = await self.seller.request('GET', '/publish-logs')
+            logs_list = logs if isinstance(logs, list) else logs.get('logs', [])
             product = self.repo.product(listing['product_id'])
-            for log in (logs if isinstance(logs, list) else logs.get('logs', [])):
-                if product['title'] in str(log) or listing.get('material_id') == log.get('material_id'):
-                    item_id = log.get('item_id') or log.get('published_item_id')
+            matched = None
+            for log in logs_list[:20]:  # broader window for manual reconcile
+                if self._match_log(log, product, listing):
+                    item_id = self._extract_item_id(log)
                     if item_id:
-                        return self.repo.update_listing(listing_id, seller_item_id=str(item_id), status='published_unbound', error=None)
-            return {'status': 'still_unknown', 'message': '未在发布日志中找到匹配记录'}
+                        matched = (item_id, log)
+                        break
+            if matched:
+                item_id, log = matched
+                updated = self.repo.update_listing(
+                    listing_id,
+                    seller_item_id=str(item_id),
+                    publish_log_id=log.get('id') or log.get('log_id'),
+                    status='published_unbound',
+                    error=None,
+                )
+                logger.info(f"Reconcile succeeded for listing {listing_id} -> item_id={item_id}")
+                return updated
+            return {'status': 'still_unknown', 'message': '未在最近发布日志中找到匹配记录（已尝试 material_id / 标题 / SKU）'}
         except Exception as exc:
             logger.error(f"Reconcile failed for listing {listing_id}: {exc}")
             raise ValueError(f'对账失败: {exc}')
