@@ -14,7 +14,7 @@ config.json
 prompts/
 .serena/
 price_history/
-data/
+/data/
 node_modules/
 runtime/
 .pytest_cache/
