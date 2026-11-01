@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote
 import httpx
 from src.infrastructure.external.seller_client import SellerClient, SellerError
+from src.infrastructure.external.seller_runtime_guard import SellerRuntimeGuard
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,13 @@ class CommerceService:
             raise ValueError('ALL_EXECUTION_MODE 必须为 preview 或 live')
         self.repo = repository
         self.mode = mode
-        self.seller = seller or SellerClient()
+        raw_seller = seller or SellerClient()
+        # Always wrap with guard; in preview it is mostly inert
+        self.seller = SellerRuntimeGuard(
+            seller=raw_seller,
+            failure_threshold=5,
+            pause_callback=self.pause,
+        )
         self.monitor_running = monitor_running or (lambda: False)
         self.publish_lock = asyncio.Lock()
 
@@ -165,7 +172,9 @@ class CommerceService:
 
     async def pause(self, paused):
         if self.mode == 'live':
-            await self.seller.request('POST', '/all/dispatch-pause', {'paused': paused})
+            # Use raw seller if available to avoid recursion through guard
+            raw = getattr(self.seller, 'seller', self.seller)
+            await raw.request('POST', '/all/dispatch-pause', {'paused': paused})
         self.repo.save_preference('paused', paused)
         return {'paused': paused}
 
