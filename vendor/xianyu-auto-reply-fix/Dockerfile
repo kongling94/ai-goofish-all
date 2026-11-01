@@ -134,5 +134,18 @@ RUN chmod +x /app/entrypoint.sh /app/debug-xvfb.sh && \
     chmod 755 /app/entrypoint.sh /app/debug-xvfb.sh && \
     ls -la /app/entrypoint.sh /app/debug-xvfb.sh
 
+ARG NODE_VERSION=22.23.4
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in amd64) NODE_ARCH=x64 ;; arm64) NODE_ARCH=arm64 ;; *) exit 1 ;; esac; \
+    cd /tmp; \
+    NODE_ARCHIVE="node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz"; \
+    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_ARCHIVE}"; \
+    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"; \
+    grep "  ${NODE_ARCHIVE}$" SHASUMS256.txt | sha256sum -c -; \
+    tar -xzf "$NODE_ARCHIVE" -C /usr/local --strip-components=1; \
+    rm "$NODE_ARCHIVE" SHASUMS256.txt; \
+    cd /app; \
+    python -c "from utils.node_runtime import configure_playwright_node; print(configure_playwright_node())"
+
 # 启动命令
 CMD ["/app/entrypoint.sh"]
