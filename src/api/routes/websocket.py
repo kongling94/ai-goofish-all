@@ -17,6 +17,10 @@ async def websocket_endpoint(
     websocket: WebSocket,
 ):
     """WebSocket 端点"""
+    from src.security.session import COOKIE_NAME, valid_session
+    if not valid_session(websocket.cookies.get(COOKIE_NAME, "")):
+        await websocket.close(code=1008)
+        return
     # 接受连接
     await websocket.accept()
     active_connections.add(websocket)

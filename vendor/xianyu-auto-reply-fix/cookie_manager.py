@@ -60,6 +60,8 @@ class CookieManager:
     # ------------------------ 内部协程 ------------------------
     async def _run_xianyu(self, cookie_id: str, cookie_value: str, user_id: int = None):
         """在事件循环中启动 XianyuLive.main"""
+        from all_runtime import require_live
+        require_live()
         logger.info(f"【{cookie_id}】_run_xianyu方法开始执行...")
 
         try:

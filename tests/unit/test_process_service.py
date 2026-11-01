@@ -109,3 +109,29 @@ def test_process_service_adds_debug_limit_arg_when_env_enabled(monkeypatch):
         "--debug-limit",
         "1",
     ]
+
+
+def test_process_service_admits_only_one_real_child_and_recovers(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    async def scenario():
+        service = ProcessService()
+        service._build_spawn_command = lambda name: [
+            sys.executable, "-c", "import time; time.sleep(30)"
+        ]
+        try:
+            results = await asyncio.gather(
+                service.start_task(1, "first"),
+                service.start_task(2, "second"),
+            )
+            assert results.count(True) == 1
+            assert len(service.processes) == 1
+            active_id = next(iter(service.processes))
+            assert await service.start_task(3, "busy") is False
+            await service.stop_task(active_id)
+            assert await service.start_task(3, "after-exit") is True
+        finally:
+            for task_id in tuple(service.processes):
+                await service.stop_task(task_id)
+
+    asyncio.run(scenario())

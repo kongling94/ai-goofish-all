@@ -65,6 +65,12 @@ class ItemAnalysisDispatcher:
         while self._tasks:
             await asyncio.gather(*tuple(self._tasks))
 
+    async def cancel(self) -> None:
+        tasks = tuple(self._tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     async def _process_with_limit(self, job: ItemAnalysisJob) -> None:
         async with self._semaphore:
             await self._process_job(job)

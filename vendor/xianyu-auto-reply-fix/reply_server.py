@@ -1215,22 +1215,21 @@ logger.info("Web服务器启动，文件日志收集器已初始化")
 @app.on_event("startup")
 async def start_scheduled_task_checker():
     """应用启动时开启定时任务检查协程"""
-    asyncio.create_task(scheduled_task_checker())
-    from auto_relist_task import auto_relist_task_loop
-    asyncio.create_task(auto_relist_task_loop())
-    logger.info("定时任务调度器已启动")
-    try:
-        from auto_rate_task import auto_rate_task_loop
-        asyncio.create_task(auto_rate_task_loop())
-        logger.info("自动补评价任务已启动")
-    except Exception as exc:
-        logger.error(f"自动补评价任务启动失败: {exc}")
-    try:
-        from auto_red_flower_task import auto_red_flower_task_loop
-        asyncio.create_task(auto_red_flower_task_loop())
-        logger.info("自动求小红花任务已启动")
-    except Exception as exc:
-        logger.error(f"自动求小红花任务启动失败: {exc}")
+    from all_runtime import is_live
+    if is_live():
+        from auto_relist_task import auto_relist_task_loop
+        asyncio.create_task(auto_relist_task_loop())
+
+
+@app.middleware("http")
+async def all_execution_gate(request: Request, call_next):
+    from all_runtime import is_live
+    from fastapi.responses import JSONResponse
+    if not is_live():
+        if request.url.path == "/health":
+            return JSONResponse({"status": "healthy", "mode": "preview", "platform_connected": False})
+        return JSONResponse({"detail": "卖家引擎处于演练隔离模式"}, status_code=423)
+    return await call_next(request)
 
 
 # 添加请求日志中间件
@@ -1736,6 +1735,20 @@ async def _login_with_credentials(login_request: LoginRequest, request: Request)
             success=False,
             message="请提供有效的登录信息"
         )
+
+
+@app.post('/all/service-login')
+async def all_service_login(payload: LoginRequest, request: Request):
+    expected = os.getenv('SELLER_SERVICE_TOKEN', '')
+    provided = request.headers.get('X-All-Service-Token', '')
+    if not expected or not secrets.compare_digest(expected, provided):
+        raise HTTPException(401, '内部服务认证失败')
+    if not payload.username or not payload.password or not db_manager.verify_user_password(payload.username, payload.password):
+        raise HTTPException(401, '内部服务账号密码错误')
+    user = db_manager.get_user_by_username(payload.username)
+    token = generate_token()
+    SESSION_TOKENS[token] = {'user_id': user['id'], 'username': user['username'], 'is_admin': bool(user.get('is_admin')), 'timestamp': time.time()}
+    return {'success': True, 'token': token}
 
 
 @app.post('/login')

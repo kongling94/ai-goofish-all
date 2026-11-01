@@ -129,3 +129,47 @@ def test_item_analysis_dispatcher_supports_keyword_mode_without_ai():
     asyncio.run(run())
     assert saved_records[0]["ai_analysis"]["analysis_source"] == "keyword"
     assert saved_records[0]["ai_analysis"]["is_recommended"] is True
+
+
+def test_cancel_stops_active_and_queued_seller_work():
+    async def scenario():
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        seller_calls = []
+
+        async def seller_loader(user_id):
+            seller_calls.append(user_id)
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        async def unexpected(*args):
+            raise AssertionError("cancelled work must not reach AI, persistence or notifications")
+
+        dispatcher = ItemAnalysisDispatcher(
+            concurrency=1, skip_ai_analysis=False, seller_loader=seller_loader,
+            image_downloader=unexpected, ai_analyzer=unexpected,
+            notifier=unexpected, saver=unexpected,
+        )
+        for index in range(2):
+            dispatcher.submit(ItemAnalysisJob(
+                keyword="offline", task_name="offline", decision_mode="ai",
+                analyze_images=False, prompt_text="", keyword_rules=(),
+                final_record={"商品信息": {"商品ID": str(index)}},
+                seller_id=str(index), zhima_credit_text="", registration_duration_text="",
+            ))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        try:
+            await dispatcher.cancel()
+        finally:
+            for task in tuple(dispatcher._tasks):
+                task.cancel()
+            await asyncio.gather(*tuple(dispatcher._tasks), return_exceptions=True)
+        await dispatcher.join()
+        assert cancelled.is_set()
+        assert seller_calls == ["0"]
+        assert dispatcher.completed_count == 0
+
+    asyncio.run(scenario())

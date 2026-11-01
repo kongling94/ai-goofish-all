@@ -228,6 +228,8 @@ def run_slider_strict(
     **kwargs: Any,
 ) -> SliderVerificationResult:
     """调用同步 slider.run，并进行严格 x5sec 判定。"""
+    from all_runtime import manual_verification
+    manual_verification(str(getattr(slider, "user_id", "")))
     success, cookies = slider.run(url, **kwargs)
     return validate_slider_result(success, cookies, engine=engine)
 
@@ -247,6 +249,8 @@ def run_slider_with_fallback(
     **kwargs: Any,
 ) -> SliderVerificationResult:
     """先运行远程/现有 Playwright 滑块，失败时可用 DrissionPage 兜底。"""
+    from all_runtime import manual_verification
+    manual_verification(str(getattr(slider, "user_id", "")))
     user_id = str(getattr(slider, "user_id", None) or getattr(slider, "pure_user_id", None) or "unknown")
 
     use_remote = _env_bool("XY_SLIDER_REMOTE_ENABLED", False) if remote_enabled is None else bool(remote_enabled)
@@ -305,6 +309,8 @@ async def run_slider_async_strict(
     **kwargs: Any,
 ) -> SliderVerificationResult:
     """调用异步 slider.async_run，并进行严格 x5sec 判定。"""
+    from all_runtime import manual_verification
+    manual_verification(str(getattr(slider, "user_id", "")))
     success, cookies = await slider.async_run(url, **kwargs)
     return validate_slider_result(success, cookies, engine=engine)
 
@@ -324,6 +330,8 @@ async def run_slider_async_with_fallback(
     **kwargs: Any,
 ) -> SliderVerificationResult:
     """异步版本：远程/Playwright 严格判定失败后可运行 DrissionPage 兜底。"""
+    from all_runtime import manual_verification
+    manual_verification(str(getattr(slider, "user_id", "")))
     import asyncio
 
     user_id = str(getattr(slider, "user_id", None) or getattr(slider, "pure_user_id", None) or "unknown")

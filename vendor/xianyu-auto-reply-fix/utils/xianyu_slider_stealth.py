@@ -12621,6 +12621,8 @@ class XianyuSliderStealth:
         notification_scene: str = '手动导入 Cookie',
     ):
         """运行主流程，返回(成功状态, cookie数据)"""
+        from all_runtime import manual_verification
+        manual_verification(str(getattr(self, "user_id", "")))
         cookies = None
         # 每次 run() 进入都先清空内层自救兜底标记，避免上次状态残留
         self._post_recovery_success = False
@@ -12897,6 +12899,8 @@ class XianyuSliderStealth:
 
         在独立线程中运行同步的 Playwright，避免事件循环冲突
         """
+        from all_runtime import manual_verification
+        manual_verification(str(getattr(self, "user_id", "")))
         import asyncio
 
         def _run_in_thread():

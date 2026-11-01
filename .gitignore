@@ -15,3 +15,7 @@ prompts/
 .serena/
 price_history/
 data/
+node_modules/
+runtime/
+.pytest_cache/
+*.pyc

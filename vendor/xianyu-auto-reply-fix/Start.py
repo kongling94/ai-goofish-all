@@ -524,6 +524,12 @@ async def main():
 
     loop = asyncio.get_running_loop()
 
+    from all_runtime import is_live
+    if not is_live():
+        threading.Thread(target=_start_api_server, daemon=True).start()
+        await asyncio.Event().wait()
+        return
+
     # 创建 CookieManager 并在全局暴露
     print("创建 CookieManager...")
     cm.manager = cm.CookieManager(loop)

@@ -81,7 +81,8 @@ async def lifespan(app: FastAPI):
 
     # 加载定时任务
     await scheduler_service.reload_jobs(tasks_list)
-    scheduler_service.start()
+    if os.getenv("ALL_EXECUTION_MODE", "preview") == "live":
+        scheduler_service.start()
 
     print("应用启动完成")
 
@@ -101,6 +102,32 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+from src.api.routes import commerce
+from src.security.session import COOKIE_NAME, SESSION_SECONDS, issue_session, valid_session
+from starlette.responses import JSONResponse as AuthJSONResponse
+from urllib.parse import urlparse
+
+
+@app.middleware("http")
+async def server_auth(request, call_next):
+    if request.url.path.startswith("/api/"):
+        if os.getenv("ALL_EXECUTION_MODE", "preview") != "live" and request.url.path.startswith("/api/tasks/start/"):
+            return AuthJSONResponse({"detail": "演练模式不连接闲鱼，请配置正式模式后重启"}, status_code=409)
+        if not valid_session(request.cookies.get(COOKIE_NAME, "")):
+            return AuthJSONResponse({"detail": "请先登录"}, status_code=401)
+        origin = request.headers.get("origin")
+        if request.method not in ("GET", "HEAD", "OPTIONS") and origin and urlparse(origin).netloc != request.headers.get("host"):
+            return AuthJSONResponse({"detail": "请求来源不匹配"}, status_code=403)
+    try:
+        return await call_next(request)
+    except (LookupError, ValueError) as exc:
+        return AuthJSONResponse({"detail": str(exc)}, status_code=400)
+    except commerce.SellerError as exc:
+        return AuthJSONResponse({"detail": str(exc)}, status_code=502)
+
+
+app.include_router(commerce.router)
 
 # 注册路由
 app.include_router(tasks.router)
@@ -142,11 +169,21 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/auth/status")
-async def auth_status(payload: LoginRequest):
+async def auth_status(payload: LoginRequest, request: Request):
     """检查认证状态"""
     if payload.username == app_settings.web_username and payload.password == app_settings.web_password:
-        return {"authenticated": True, "username": payload.username}
+        response = JSONResponse({"authenticated": True, "username": payload.username})
+        response.set_cookie(COOKIE_NAME, issue_session(payload.username), httponly=True,
+                            samesite="strict", secure=request.url.scheme == "https", max_age=SESSION_SECONDS)
+        return response
     raise HTTPException(status_code=401, detail="认证失败")
+
+
+@app.post("/auth/logout")
+async def logout():
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(COOKIE_NAME)
+    return response
 
 
 # 主页路由 - 服务 Vue 3 SPA

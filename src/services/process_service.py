@@ -26,6 +26,7 @@ class ProcessService:
     """进程管理服务"""
 
     def __init__(self):
+        self._start_lock = asyncio.Lock()
         self.processes: Dict[int, asyncio.subprocess.Process] = {}
         self.log_paths: Dict[int, str] = {}
         self.log_handles: Dict[int, TextIO] = {}
@@ -132,9 +133,13 @@ class ProcessService:
 
     async def start_task(self, task_id: int, task_name: str) -> bool:
         """启动任务进程"""
+        async with self._start_lock:
+            return await self._start_task(task_id, task_name)
+
+    async def _start_task(self, task_id: int, task_name: str) -> bool:
         await self._drain_finished_process(task_id)
-        if self.is_running(task_id):
-            print(f"任务 '{task_name}' (ID: {task_id}) 已在运行中")
+        if any(self.is_running(active_id) for active_id in self.processes):
+            print(f"已有采集任务运行，跳过本轮任务 '{task_name}' (ID: {task_id})")
             return False
 
         decision = self.failure_guard.should_skip_start(

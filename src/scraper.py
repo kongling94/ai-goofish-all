@@ -3,6 +3,7 @@ import json
 import os
 import random
 import re
+import sys
 import tempfile
 from datetime import datetime
 from typing import Optional
@@ -71,6 +72,17 @@ class RiskControlError(Exception):
 
 class LoginRequiredError(Exception):
     """Raised when Goofish redirects to the passport/mini_login flow."""
+
+
+async def _read_market_response(response: Response) -> Optional[dict]:
+    if response.status in (403, 429):
+        raise RiskControlError(f"HTTP {response.status}")
+    if not response.ok:
+        return None
+    payload = await response.json()
+    if "FAIL_SYS_USER_VALIDATE" in str(payload.get("ret", [])):
+        raise RiskControlError("FAIL_SYS_USER_VALIDATE")
+    return payload
 
 
 FAILURE_GUARD = FailureGuard()
@@ -150,14 +162,15 @@ def _format_failure_reason(reason: str, limit: int = 500) -> str:
 
 
 async def _notify_task_failure(
-    task_config: dict, reason: str, *, cookie_path: Optional[str]
+    task_config: dict, reason: str, *, cookie_path: Optional[str],
+    pause_immediately: bool = False,
 ) -> None:
     task_name = task_config.get("task_name", "未命名任务")
     keyword = task_config.get("keyword", "")
     formatted_reason = _format_failure_reason(reason)
 
     # Some failures are deterministic misconfiguration and should pause/notify immediately.
-    pause_immediately = any(
+    pause_immediately = pause_immediately or any(
         marker in formatted_reason
         for marker in (
             "未找到可用的代理地址",
@@ -986,12 +999,16 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                             break
                         current_response = page_advance_result.response
 
-                    if not (current_response and current_response.ok):
+                    search_payload = (
+                        await _read_market_response(current_response)
+                        if current_response else None
+                    )
+                    if search_payload is None:
                         log_time(f"第 {page_num} 页响应无效，跳过。")
                         continue
 
                     basic_items = await _parse_search_results_json(
-                        await current_response.json(), f"第 {page_num} 页"
+                        search_payload, f"第 {page_num} 页"
                     )
                     if not basic_items:
                         break
@@ -1040,29 +1057,8 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                 )
 
                             detail_response = await detail_info.value
-                            if detail_response.ok:
-                                detail_json = await detail_response.json()
-
-                                ret_string = str(
-                                    await safe_get(detail_json, "ret", default=[])
-                                )
-                                if "FAIL_SYS_USER_VALIDATE" in ret_string:
-                                    print(
-                                        "\n==================== CRITICAL BLOCK DETECTED ===================="
-                                    )
-                                    print(
-                                        "检测到闲鱼反爬虫验证 (FAIL_SYS_USER_VALIDATE)，程序将终止。"
-                                    )
-                                    long_sleep_duration = random.randint(3, 60)
-                                    print(
-                                        f"为避免账户风险，将执行一次长时间休眠 ({long_sleep_duration} 秒) 后再退出..."
-                                    )
-                                    await asyncio.sleep(long_sleep_duration)
-                                    print("长时间休眠结束，现在将安全退出。")
-                                    print(
-                                        "==================================================================="
-                                    )
-                                    raise RiskControlError("FAIL_SYS_USER_VALIDATE")
+                            detail_json = await _read_market_response(detail_response)
+                            if detail_json is not None:
 
                                 # 解析商品详情数据并更新 item_data
                                 item_do = await safe_get(
@@ -1181,7 +1177,13 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                         "----------------------------------------------------"
                                     )
 
-                        except PlaywrightTimeoutError:
+                        except (RiskControlError, LoginRequiredError):
+                            raise
+                        except PlaywrightTimeoutError as exc:
+                            if _is_login_url(detail_page.url):
+                                raise LoginRequiredError(
+                                    "Login required: detail page redirected to login"
+                                ) from exc
                             print(f"   错误: 访问商品详情页或等待API响应超时。")
                         except Exception as e:
                             print(f"   错误: 处理商品详情时发生未知错误: {e}")
@@ -1219,8 +1221,12 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 raise
             finally:
                 if analysis_dispatcher is not None:
-                    log_time("等待后台分析任务完成...")
-                    await analysis_dispatcher.join()
+                    if isinstance(sys.exc_info()[1], (RiskControlError, LoginRequiredError)):
+                        log_time("检测到访问限制，取消后台采集和分析任务。")
+                        await analysis_dispatcher.cancel()
+                    else:
+                        log_time("等待后台分析任务完成...")
+                        await analysis_dispatcher.join()
                 log_time("任务执行完毕，浏览器将在5秒后自动关闭...")
                 await asyncio.sleep(5)
                 if debug_limit:
@@ -1236,6 +1242,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         1,
     )
     last_error = ""
+    pause_immediately = False
     last_state_path: Optional[str] = None
 
     # If this task is already in a paused state, skip immediately.
@@ -1321,10 +1328,12 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             FAILURE_GUARD.record_success(task_name_for_guard)
             break
         except LoginRequiredError as e:
+            pause_immediately = True
             last_error = str(e)
             print(f"检测到登录失效/重定向: {e}")
             break
         except RiskControlError as e:
+            pause_immediately = True
             last_error = str(e)
             print(f"检测到风控或验证触发: {e}")
             # 风控验证通常不是简单轮换能解决的，避免无意义重试。
@@ -1336,7 +1345,10 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 print("将尝试轮换账号/IP 后重试...")
 
     if last_error:
-        await _notify_task_failure(task_config, last_error, cookie_path=last_state_path)
+        await _notify_task_failure(
+            task_config, last_error, cookie_path=last_state_path,
+            pause_immediately=pause_immediately,
+        )
 
     # 清理任务图片目录
     cleanup_task_images(task_config.get("task_name", "default"))
