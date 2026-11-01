@@ -1,7 +1,10 @@
 import asyncio
+import logging
 from urllib.parse import quote
 import httpx
 from src.infrastructure.external.seller_client import SellerClient, SellerError
+
+logger = logging.getLogger(__name__)
 
 
 class CommerceService:
@@ -37,20 +40,55 @@ class CommerceService:
             payload = {key: product[key] for key in ('title', 'description', 'price', 'category')}
             payload.update(account_id=account_id, images=[{'url': image} for image in product['images']], delivery_method='包邮')
             try:
+                logger.info(f"Publishing product {product_id} for account {account_id}")
                 material = await self.seller.request('POST', '/product-materials', {key: value for key, value in payload.items() if key != 'account_id'})
                 material_id = material['material']['id']
                 self.repo.update_listing(listing['id'], material_id=material_id)
                 result = await self.seller.request('POST', '/product-publish', payload)
                 item_id = result.get('published_item_id')
                 if not item_id:
-                    return self.repo.update_listing(listing['id'], status='unknown', error='平台未返回可核对的商品 ID')
+                    # Attempt basic reconciliation by checking publish logs
+                    logger.warning(f"No published_item_id returned for listing {listing['id']}, attempting reconcile")
+                    logs = await self.seller.request('GET', '/publish-logs')
+                    # Simple heuristic: look for recent matching title
+                    for log in (logs if isinstance(logs, list) else logs.get('logs', []))[:5]:
+                        if product['title'] in str(log):
+                            item_id = log.get('item_id') or log.get('published_item_id')
+                            if item_id:
+                                break
+                    if not item_id:
+                        return self.repo.update_listing(listing['id'], status='unknown', error='平台未返回可核对的商品 ID，已尝试自动对账失败')
+                logger.info(f"Publish succeeded with item_id={item_id}")
                 return self.repo.update_listing(listing['id'], status='published_unbound', seller_item_id=str(item_id), publish_log_id=result.get('log_id'))
             except (httpx.RequestError, SellerError, KeyError) as exc:
+                error_type = 'network' if isinstance(exc, httpx.RequestError) else 'seller' if isinstance(exc, SellerError) else 'parse'
+                logger.error(f"Publish failed for product {product_id}: {error_type} - {exc}")
                 if isinstance(exc, SellerError) and exc.status in (403, 429):
                     await self.pause(True)
-                return self.repo.update_listing(listing['id'], status='unknown', error='发布结果待核对，不自动重试')
+                    error_msg = '发布因风控/限流暂停，结果待核对'
+                else:
+                    error_msg = f'发布结果待核对（{error_type}），不自动重试'
+                return self.repo.update_listing(listing['id'], status='unknown', error=error_msg)
             finally:
                 self.repo.record('publish', listing['id'], 'submitted')
+
+    async def reconcile_unknown(self, listing_id):
+        """Active reconciliation for unknown publish status."""
+        listing = self.repo.listing(listing_id)
+        if listing['status'] not in ('unknown', 'publishing'):
+            raise ValueError('仅未知或发布中状态可主动对账')
+        try:
+            logs = await self.seller.request('GET', '/publish-logs')
+            product = self.repo.product(listing['product_id'])
+            for log in (logs if isinstance(logs, list) else logs.get('logs', [])):
+                if product['title'] in str(log) or listing.get('material_id') == log.get('material_id'):
+                    item_id = log.get('item_id') or log.get('published_item_id')
+                    if item_id:
+                        return self.repo.update_listing(listing_id, seller_item_id=str(item_id), status='published_unbound', error=None)
+            return {'status': 'still_unknown', 'message': '未在发布日志中找到匹配记录'}
+        except Exception as exc:
+            logger.error(f"Reconcile failed for listing {listing_id}: {exc}")
+            raise ValueError(f'对账失败: {exc}')
 
     async def bind_delivery(self, listing_id):
         self.ensure_dispatch()
@@ -77,9 +115,12 @@ class CommerceService:
                 with self.repo.connection() as db:
                     db.execute("UPDATE stock SET state='exported' WHERE product_id=? AND state='available'", (product['id'],))
             rule = await self.seller.request('POST', '/delivery-rules', {'keyword': listing['seller_item_id'], 'card_id': card_id, 'delivery_count': 1, 'enabled': True})
+            logger.info(f"Bind succeeded for listing {listing_id}, rule_id={rule.get('id')}")
             return self.repo.update_listing(listing_id, status='ready', rule_id=rule['id'], error=None)
-        except (httpx.RequestError, SellerError, KeyError):
-            return self.repo.update_listing(listing_id, status='binding_unknown', error='商品已发布，发货绑定结果待核对；请勿重新发布')
+        except (httpx.RequestError, SellerError, KeyError) as exc:
+            error_type = 'network' if isinstance(exc, httpx.RequestError) else 'seller'
+            logger.error(f"Bind failed for listing {listing_id}: {error_type} - {exc}")
+            return self.repo.update_listing(listing_id, status='binding_unknown', error=f'商品已发布，发货绑定结果待核对（{error_type}）；请勿重新发布')
 
     def import_stock(self, product_id, codes):
         if self.mode == 'live' and any(row['product_id'] == product_id and row['status'] not in ('published_unbound', 'unknown', 'publishing') for row in self.repo.listings()):

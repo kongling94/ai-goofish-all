@@ -82,6 +82,12 @@ def reconcile(listing_id: int, payload: ReconcileInput, service=Depends(get_comm
         publish_log_id=payload.publish_log_id, status='published_unbound', error=None)
 
 
+@router.post('/listings/{listing_id}/reconcile-active')
+async def reconcile_active(listing_id: int, service=Depends(get_commerce)):
+    """主动对账未知状态的发布记录。"""
+    return await service.reconcile_unknown(listing_id)
+
+
 class BindingReconcileInput(BaseModel):
     card_id: int = Field(gt=0)
     rule_id: int = Field(gt=0)
