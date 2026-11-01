@@ -94,7 +94,15 @@ onMounted(async () => {
     </section>
 
     <section v-else-if="tab === '发布记录'" class="panel space-y-4"><h2>发布记录与关联</h2><label>发布账号<input v-model="account"></label><p class="hint">演练记录没有平台商品 ID。正式发布后还需绑定交付；结果未知时先核对，不重复发布。</p>
-      <article v-for="row in listings" :key="row.id" class="rounded-xl border p-4 space-y-2"><strong>#{{ row.id }} · 商品 {{ row.product_id }} · {{ row.status }}</strong><p class="hint">账号 {{ row.account_id }} · {{ row.mode }} · 平台 ID {{ row.seller_item_id || '—' }}</p><p v-if="row.error" class="text-amber-700">{{ row.error }}</p><button v-if="row.status === 'published_unbound'" :disabled="busy" @click="run(() => api(`/listings/${row.id}/bind`, 'POST'))">绑定库存与自动发货</button></article>
+      <article v-for="row in listings" :key="row.id" class="rounded-xl border p-4 space-y-2">
+        <strong>#{{ row.id }} · 商品 {{ row.product_id }} · {{ row.status }}</strong>
+        <p class="hint">账号 {{ row.account_id }} · {{ row.mode }} · 平台 ID {{ row.seller_item_id || '—' }}</p>
+        <p v-if="row.error" class="text-amber-700">{{ row.error }}</p>
+        <div class="flex flex-wrap gap-2 mt-2">
+          <button v-if="row.status === 'published_unbound'" :disabled="busy" @click="run(() => api(`/listings/${row.id}/bind`, 'POST'))">绑定库存与自动发货</button>
+          <button v-if="['unknown', 'publishing'].includes(row.status)" :disabled="busy" @click="run(() => api(`/listings/${row.id}/reconcile-active`, 'POST'))">主动对账</button>
+        </div>
+      </article>
       <form class="grid gap-3 border-t pt-4" @submit.prevent="run(() => api(`/listings/${selectedListing}/reconcile`, 'POST', { seller_item_id: itemId }))"><h3>发布结果待核对</h3><label>记录编号<input v-model.number="selectedListing" type="number" min="1" required></label><label>人工核对的平台商品 ID<input v-model="itemId" required></label><button :disabled="busy">保存核对结果</button></form>
       <form v-if="mode === 'live'" class="grid gap-3 border-t pt-4" @submit.prevent="run(() => api(`/listings/${selectedListing}/reconcile-binding`, 'POST', { card_id: cardId, rule_id: ruleId }))"><h3>核对已有发货绑定</h3><p class="hint">绑定中断后，先在卖家引擎确认已有卡券和规则。此操作只读取核对，不重新创建。</p><label>发布记录编号<input v-model.number="selectedListing" type="number" min="1" required></label><label>已有卡券编号<input v-model.number="cardId" type="number" min="1" required></label><label>已有发货规则编号<input v-model.number="ruleId" type="number" min="1" required></label><button :disabled="busy">读取并核对绑定</button></form>
     </section>
