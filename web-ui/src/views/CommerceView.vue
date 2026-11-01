@@ -4,6 +4,8 @@ import { useRoute } from 'vue-router'
 
 interface Product { id: number; sku: string; title: string; price: number; stock_count: number; delivery_type: string }
 interface Listing { id: number; product_id: number; account_id: string; status: string; mode: string; seller_item_id: string | null; material_id: number | null; card_id: number | null; error: string | null }
+interface GuardStatus { consecutive_failures?: number; paused_by_guard?: boolean; threshold?: number; last_failure_ago_seconds?: number | null }
+
 const route = useRoute()
 const tab = ref('商品目录')
 const tabs = ['商品目录', '发布记录', '客服回复', '数字库存', '订单演练', '自动续售', '卖家账号', '执行记录']
@@ -29,6 +31,7 @@ const delay = ref(60)
 const minimumStock = ref(1)
 const cardId = ref(0)
 const ruleId = ref(0)
+const guard = ref<GuardStatus>({})
 const ai = reactive({ ai_enabled: false, base_url: 'https://api.deepseek.com', model_name: 'deepseek-flash', api_key: '', max_discount_percent: 0, max_discount_amount: 0, max_bargain_rounds: 0 })
 const product = reactive({ sku: '', title: '', description: '', price: 1, images: '', category: '', source_item_id: '', delivery_type: 'stock', fixed_content: '' })
 
@@ -41,6 +44,7 @@ async function api(path: string, method = 'GET', body?: unknown) {
 async function refresh() {
   const [status, items, records] = await Promise.all([api('/status'), api('/products'), api('/listings')])
   mode.value = status.mode; paused.value = status.paused; products.value = items; listings.value = records
+  guard.value = status.guard || {}
   if (!stockProduct.value && items.length) stockProduct.value = items[0].id
 }
 async function run(action: () => Promise<unknown>) {
@@ -67,8 +71,20 @@ onMounted(async () => {
 <template>
   <main class="commerce space-y-6">
     <header class="flex flex-wrap items-start justify-between gap-4">
-      <div><h1 class="text-3xl font-bold">数字商品工作台</h1><p class="mt-2 text-slate-500">管理自有商品、发布、客服和数字交付。</p></div>
-      <div class="flex items-center gap-3"><span class="rounded-full bg-blue-50 px-4 py-2 text-blue-700">{{ mode === 'preview' ? '演练 · 未连接闲鱼' : '正式模式 · 真实平台动作' }}</span><button :disabled="busy" @click="run(() => api('/pause', 'POST', { paused: !paused }))">{{ paused ? '恢复新动作' : '暂停新动作' }}</button></div>
+      <div>
+        <h1 class="text-3xl font-bold">数字商品工作台</h1>
+        <p class="mt-2 text-slate-500">管理自有商品、发布、客服和数字交付。</p>
+      </div>
+      <div class="flex flex-col items-end gap-2">
+        <div class="flex items-center gap-3">
+          <span class="rounded-full bg-blue-50 px-4 py-2 text-blue-700">{{ mode === 'preview' ? '演练 · 未连接闲鱼' : '正式模式 · 真实平台动作' }}</span>
+          <button :disabled="busy" @click="run(() => api('/pause', 'POST', { paused: !paused }))">{{ paused ? '恢复新动作' : '暂停新动作' }}</button>
+        </div>
+        <div v-if="mode === 'live'" class="text-xs text-slate-500">
+          熔断计数：{{ guard.consecutive_failures || 0 }} / {{ guard.threshold || 5 }}
+          <span v-if="guard.paused_by_guard" class="ml-2 text-amber-600 font-medium">（已自动暂停）</span>
+        </div>
+      </div>
     </header>
     <div v-if="mode === 'preview'" class="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">当前使用隔离演练数据，不发布真实商品、不建立账号监听、不发送消息。正式模式需在部署配置中切换并重启两个服务。</div>
     <div v-if="paused" class="rounded-xl bg-amber-50 p-4">手动派发和自动续售已暂停。已提交动作、实时消息和订单处理可能继续，请核对记录。</div>

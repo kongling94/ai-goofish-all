@@ -25,9 +25,32 @@ def get_commerce():
 
 @router.get('/status')
 def status(service=Depends(get_commerce)):
-    return {'mode': service.mode, 'paused': service.repo.preferences().get('paused', False),
-            'products': len(service.repo.products()), 'listings': len(service.repo.listings()),
-            'platform_connected': None if service.mode == 'live' else False, 'mode_requires_restart': True}
+    guard_status = {}
+    if hasattr(service.seller, 'status'):
+        guard_status = service.seller.status()
+    return {
+        'mode': service.mode,
+        'paused': service.repo.preferences().get('paused', False),
+        'products': len(service.repo.products()),
+        'listings': len(service.repo.listings()),
+        'platform_connected': None if service.mode == 'live' else False,
+        'mode_requires_restart': True,
+        'guard': guard_status,
+    }
+
+
+@router.get('/health')
+def health(service=Depends(get_commerce)):
+    """Runtime health including circuit-breaker status."""
+    guard = {}
+    if hasattr(service.seller, 'status'):
+        guard = service.seller.status()
+    return {
+        'mode': service.mode,
+        'paused': service.repo.preferences().get('paused', False),
+        'guard': guard,
+        'healthy': not guard.get('paused_by_guard', False) and guard.get('consecutive_failures', 0) < guard.get('threshold', 5),
+    }
 
 
 @router.post('/pause')
