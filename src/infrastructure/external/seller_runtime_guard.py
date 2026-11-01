@@ -2,7 +2,8 @@
 
 Tracks consecutive failures that are likely related to auth token or
 WebSocket channel issues and auto-pauses dispatch to reduce risk.
-Supports auto-resume after a quiet period and optional webhook alerts.
+Supports auto-resume after a quiet period, optional webhook alerts,
+and Playwright browser fallback for recovery.
 This is intentionally non-invasive and does not modify vendor code.
 """
 
@@ -15,6 +16,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from src.infrastructure.external.seller_client import SellerClient, SellerError
+from src.infrastructure.external.seller_browser_fallback import SellerBrowserFallback
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class SellerRuntimeGuard:
         self.auto_resume_seconds = auto_resume_seconds
         self.pause_callback = pause_callback
         self.alert_webhook = alert_webhook or os.getenv("SELLER_ALERT_WEBHOOK", "")
+        self.browser_fallback = SellerBrowserFallback()
 
         self._consecutive_failures = 0
         self._last_failure_time = 0.0
@@ -69,6 +72,19 @@ class SellerRuntimeGuard:
             logger.info("Auto-resume completed")
         except Exception as exc:
             logger.error(f"Auto-resume callback failed: {exc}")
+
+    async def _try_browser_recovery(self):
+        """Optional browser-based recovery when paused."""
+        if not self.browser_fallback.enabled:
+            return False
+        logger.info("Attempting browser fallback recovery")
+        # Example: try to refresh cookies for a default account context
+        cookies = await self.browser_fallback.refresh_cookies_via_browser("default")
+        if cookies:
+            logger.info("Browser recovery obtained cookies (manual re-import may still be required)")
+            # In a full implementation this could update the seller account store
+            return True
+        return False
 
     async def _send_alert(self, message: str):
         if not self.alert_webhook:
@@ -116,10 +132,11 @@ class SellerRuntimeGuard:
                             await result
                     except Exception as cb_exc:
                         logger.error(f"Pause callback failed: {cb_exc}")
-                # Fire-and-forget alert
+                # Fire-and-forget alert + optional browser recovery
                 asyncio.create_task(self._send_alert(
                     f"卖家引擎连续失败 {self._consecutive_failures} 次，已自动暂停派发。请检查登录态或风控。"
                 ))
+                asyncio.create_task(self._try_browser_recovery())
 
     async def request(self, method: str, path: str, payload: Any = None):
         """Guarded request. Call this instead of seller.request when you want protection."""
@@ -145,4 +162,5 @@ class SellerRuntimeGuard:
                 int(time.time() - self._pause_time) if self._pause_time else None
             ),
             "alert_webhook_configured": bool(self.alert_webhook),
+            "browser_fallback_enabled": self.browser_fallback.enabled,
         }
