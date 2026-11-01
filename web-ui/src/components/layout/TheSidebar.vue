@@ -20,6 +20,7 @@ const { isConnected } = useWebSocket()
 const { t } = useI18n()
 
 const navItems = computed(() => [
+  { to: '/commerce', label: '数字商品工作台', icon: Layers },
   { to: '/dashboard', label: t('sidebar.dashboard'), icon: LayoutDashboard },
   { to: '/tasks', label: t('sidebar.tasks'), icon: ListTodo },
   { to: '/accounts', label: t('sidebar.accounts'), icon: Users },

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { RouterLink } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { ResultItem } from '@/types/result.d.ts'
 import {
@@ -172,6 +173,7 @@ const expanded = ref(false)
       </div>
     </CardContent>
 
+    <div class="px-6 pb-3"><RouterLink :to="{ path: '/commerce', query: { title: info.商品标题, source: String(info.商品ID) } }" class="text-sm font-semibold text-primary">转为自有商品素材 →</RouterLink></div>
     <CardFooter class="px-4 py-3 bg-slate-50/30 border-t border-slate-100/60 flex items-center justify-between text-[10px]">
       <div class="flex items-center gap-3 text-slate-400">
         <div class="flex items-center gap-1">

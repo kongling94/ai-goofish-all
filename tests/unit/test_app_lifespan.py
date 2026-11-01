@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 
 import src.app as app_module
 
@@ -38,7 +39,9 @@ class _FakeProcessService:
         self.stop_all_called = True
 
 
-def test_lifespan_cleans_task_logs_on_startup(monkeypatch):
+@pytest.mark.parametrize("mode,started", [("preview", False), ("live", True)])
+def test_lifespan_cleans_task_logs_on_startup(monkeypatch, mode, started):
+    monkeypatch.setenv("ALL_EXECUTION_MODE", mode)
     called = {}
     fake_scheduler = _FakeSchedulerService()
     fake_process = _FakeProcessService()
@@ -57,7 +60,7 @@ def test_lifespan_cleans_task_logs_on_startup(monkeypatch):
 
     async def _run():
         async with app_module.lifespan(None):
-            assert fake_scheduler.started is True
+            assert fake_scheduler.started is started
             assert fake_scheduler.reload_payload == []
 
     asyncio.run(_run())

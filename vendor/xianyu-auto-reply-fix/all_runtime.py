@@ -17,3 +17,18 @@ def manual_verification(account_id=''):
     if cookie_manager.manager is not None and account_id in cookie_manager.manager.cookies:
         cookie_manager.manager.update_cookie_status(account_id, False)
     raise RuntimeError('检测到验证要求：已停止自动验证，请人工处理后重新启用账号')
+
+
+def dispatch_paused():
+    from pathlib import Path
+    return Path(os.getenv('ALL_DISPATCH_PAUSE_FILE', 'data/all-dispatch-paused')).exists()
+
+
+def set_dispatch_paused(paused):
+    from pathlib import Path
+    path = Path(os.getenv('ALL_DISPATCH_PAUSE_FILE', 'data/all-dispatch-paused'))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if paused:
+        path.touch()
+    else:
+        path.unlink(missing_ok=True)

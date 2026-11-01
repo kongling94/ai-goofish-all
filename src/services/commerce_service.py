@@ -47,7 +47,7 @@ class CommerceService:
                 return self.repo.update_listing(listing['id'], status='published_unbound', seller_item_id=str(item_id), publish_log_id=result.get('log_id'))
             except (httpx.RequestError, SellerError, KeyError) as exc:
                 if isinstance(exc, SellerError) and exc.status in (403, 429):
-                    self.repo.save_preference('paused', True)
+                    await self.pause(True)
                 return self.repo.update_listing(listing['id'], status='unknown', error='发布结果待核对，不自动重试')
             finally:
                 self.repo.record('publish', listing['id'], 'submitted')
@@ -81,6 +81,30 @@ class CommerceService:
         except (httpx.RequestError, SellerError, KeyError):
             return self.repo.update_listing(listing_id, status='binding_unknown', error='商品已发布，发货绑定结果待核对；请勿重新发布')
 
+    def import_stock(self, product_id, codes):
+        if self.mode == 'live' and any(row['product_id'] == product_id and row['status'] not in ('published_unbound', 'unknown', 'publishing') for row in self.repo.listings()):
+            raise ValueError('此商品已交由卖家引擎管理，首版不支持从统一入口补货；请在卖家引擎卡券中维护库存')
+        return self.repo.add_stock(product_id, codes)
+
+    async def pause(self, paused):
+        if self.mode == 'live':
+            await self.seller.request('POST', '/all/dispatch-pause', {'paused': paused})
+        self.repo.save_preference('paused', paused)
+        return {'paused': paused}
+
+    async def reconcile_binding(self, listing_id, card_id, rule_id):
+        listing = self.repo.listing(listing_id)
+        if self.mode != 'live' or listing['status'] not in ('binding', 'binding_unknown'):
+            raise ValueError('此记录不处于发货绑定待核对状态')
+        card = await self.seller.request('GET', f'/cards/{card_id}')
+        rule = await self.seller.request('GET', f'/delivery-rules/{rule_id}')
+        product = self.repo.product(listing['product_id'])
+        if card['name'] != product['sku'] or rule['card_id'] != card_id or rule['keyword'] != listing['seller_item_id'] or not card['enabled'] or not rule['enabled']:
+            raise ValueError('卡券或发货规则与当前商品不匹配或未启用')
+        with self.repo.connection() as db:
+            db.execute("UPDATE stock SET state='exported' WHERE product_id=? AND state='available'", (product['id'],))
+        return self.repo.update_listing(listing_id, card_id=card_id, rule_id=rule_id, status='ready', error=None)
+
     def simulate_order(self, product_id, order_id, payment_status, send_result='success'):
         self.ensure_dispatch()
         if self.mode != 'preview':
@@ -90,7 +114,8 @@ class CommerceService:
         return result
 
     async def resource(self, method, path, payload=None):
-        self.ensure_dispatch()
+        if method != 'GET':
+            self.ensure_dispatch()
         if self.mode == 'preview':
             key = f'{method}:{path}'
             if method == 'GET':
@@ -102,12 +127,14 @@ class CommerceService:
             return await self.seller.request(method, path, payload)
         except SellerError as exc:
             if exc.status in (403, 429):
-                self.repo.save_preference('paused', True)
+                await self.pause(True)
             raise
 
     def preview_relist(self, product_id, order_id, original_listed):
         if self.mode != 'preview':
             raise ValueError('正式模式请使用卖家续售规则')
         order = next((row for row in self.repo.orders() if row['order_id'] == order_id and row['product_id'] == product_id), None)
-        eligible = bool(order and order['status'] == 'delivered' and not original_listed and self.repo.stock_count(product_id) > 0)
+        product = self.repo.product(product_id)
+        has_stock = self.repo.stock_count(product_id) > 0 if product['delivery_type'] == 'stock' else bool(product['fixed_content'])
+        eligible = bool(order and order['status'] == 'delivered' and not original_listed and has_stock)
         return {'mode': 'preview', 'eligible': eligible, 'published': False}

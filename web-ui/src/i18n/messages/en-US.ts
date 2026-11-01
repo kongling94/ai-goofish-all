@@ -67,6 +67,7 @@ const enUS = {
     accountManagement: 'Account Management',
   },
   sidebar: {
+    commerce: 'Digital commerce',
     dashboard: 'Dashboard',
     tasks: 'Tasks',
     accounts: 'Accounts',

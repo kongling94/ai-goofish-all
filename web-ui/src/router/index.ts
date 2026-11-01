@@ -16,6 +16,7 @@ const routes = [
     component: MainLayout,
     redirect: '/dashboard',
     children: [
+      { path: 'commerce', name: 'Commerce', component: () => import('@/views/CommerceView.vue'), meta: { titleKey: 'sidebar.commerce', requiresAuth: true } },
       {
         path: 'dashboard',
         name: 'Dashboard',

@@ -21,7 +21,7 @@ services:
       - ./runtime/monitor:/app/data
       - ./runtime/state:/app/state
       - ./runtime/logs:/app/logs
-      - ./runtime/prompts:/app/prompts
+      - prompts:/app/prompts
     depends_on:
       seller-engine:
         condition: service_healthy
@@ -57,3 +57,6 @@ services:
       timeout: 10s
       start_period: 90s
       retries: 5
+
+volumes:
+  prompts:

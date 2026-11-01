@@ -67,6 +67,7 @@ const zhCN = {
     accountManagement: '账号管理',
   },
   sidebar: {
+    commerce: '数字商品工作台',
     dashboard: '监控概览',
     tasks: '任务管理',
     accounts: '账号管理',

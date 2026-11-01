@@ -31,12 +31,11 @@ def status(service=Depends(get_commerce)):
 
 
 @router.post('/pause')
-def pause(payload: dict, service=Depends(get_commerce)):
+async def pause(payload: dict, service=Depends(get_commerce)):
     value = payload.get('paused')
     if not isinstance(value, bool):
         raise HTTPException(422, 'paused 必须为布尔值')
-    service.repo.save_preference('paused', value)
-    return {'paused': value}
+    return await service.pause(value)
 
 
 @router.get('/products')
@@ -56,7 +55,7 @@ def save_product(payload: ProductInput, service=Depends(get_commerce)):
 
 @router.post('/products/{product_id}/stock')
 def stock(product_id: int, payload: StockInput, service=Depends(get_commerce)):
-    return {'available': service.repo.add_stock(product_id, payload.codes)}
+    return {'available': service.import_stock(product_id, payload.codes)}
 
 
 @router.post('/products/{product_id}/publish')
@@ -81,6 +80,16 @@ def reconcile(listing_id: int, payload: ReconcileInput, service=Depends(get_comm
         raise HTTPException(409, '此记录不处于发布待核对状态')
     return service.repo.update_listing(listing_id, seller_item_id=payload.seller_item_id,
         publish_log_id=payload.publish_log_id, status='published_unbound', error=None)
+
+
+class BindingReconcileInput(BaseModel):
+    card_id: int = Field(gt=0)
+    rule_id: int = Field(gt=0)
+
+
+@router.post('/listings/{listing_id}/reconcile-binding')
+async def reconcile_binding(listing_id: int, payload: BindingReconcileInput, service=Depends(get_commerce)):
+    return await service.reconcile_binding(listing_id, payload.card_id, payload.rule_id)
 
 
 @router.get('/executions')

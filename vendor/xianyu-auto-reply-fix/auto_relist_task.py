@@ -50,6 +50,9 @@ class AutoRelistService:
             return 'migration_retry'
 
     async def process(self, rule):
+        from all_runtime import dispatch_paused
+        if dispatch_paused():
+            return 'paused'
         event = self.store.event_for_item(rule['id'], rule['current_item_id'])
         if event:
             if event['state'] in {'publishing', 'unknown'}:
@@ -89,6 +92,8 @@ class AutoRelistService:
             current_order = self.db.get_order_by_id(order['order_id']) or {}
             if current_order.get('cookie_id') != rule['cookie_id'] or current_order.get('order_status') not in {'shipped', 'completed'}:
                 return 'waiting'
+            if dispatch_paused():
+                return 'paused'
             event, created = self.store.stage(rule, order, material)
             if not created:
                 return event['state']

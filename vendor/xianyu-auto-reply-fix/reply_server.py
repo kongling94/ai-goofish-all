@@ -1737,6 +1737,16 @@ async def _login_with_credentials(login_request: LoginRequest, request: Request)
         )
 
 
+@app.post('/all/dispatch-pause')
+async def all_dispatch_pause(payload: dict, current_user=Depends(require_admin)):
+    from all_runtime import set_dispatch_paused
+    paused = payload.get('paused')
+    if not isinstance(paused, bool):
+        raise HTTPException(422, 'paused 必须为布尔值')
+    set_dispatch_paused(paused)
+    return {'paused': paused}
+
+
 @app.post('/all/service-login')
 async def all_service_login(payload: LoginRequest, request: Request):
     expected = os.getenv('SELLER_SERVICE_TOKEN', '')

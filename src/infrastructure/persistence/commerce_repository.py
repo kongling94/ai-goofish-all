@@ -112,7 +112,8 @@ class CommerceRepository:
             if existing:
                 if existing['product_id'] != product_id:
                     raise ValueError('订单已关联其他商品')
-                return dict(existing)
+                if existing['status'] in ('delivered', 'unknown'):
+                    return dict(existing)
             status = 'ignored'
             stock_id = None
             if payment_status == 'paid':
@@ -128,7 +129,7 @@ class CommerceRepository:
                         stock_id = stock['id']
                         status = 'delivered' if send_result == 'success' else 'unknown'
                         db.execute('UPDATE stock SET state=?,order_id=? WHERE id=?', (status, order_id, stock_id))
-            db.execute('INSERT INTO preview_orders(order_id,product_id,status,stock_id) VALUES (?,?,?,?)', (order_id, product_id, status, stock_id))
+            db.execute('INSERT INTO preview_orders(order_id,product_id,status,stock_id) VALUES (?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET status=excluded.status,stock_id=excluded.stock_id', (order_id, product_id, status, stock_id))
             return dict(db.execute('SELECT * FROM preview_orders WHERE order_id=?', (order_id,)).fetchone())
 
     def save_preference(self, key, value):
